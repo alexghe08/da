@@ -1,13 +1,33 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
+from contextlib import asynccontextmanager
+import os
 
-app = FastAPI(title="LicitatieAI API", description="API for generating public procurement documents")
+# Import the RAG engine
+# Using relative import assuming this is run as a module or package
+from .rag_engine import rag_engine
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load knowledge base on startup
+    # We assume the data directory is relative to the project root
+    # Adjust path if necessary. backend/app/main.py -> ../../data/legislation
+    data_path = os.path.join(os.path.dirname(__file__), '../../data/legislation')
+    rag_engine.initialize_knowledge_base(data_path)
+    yield
+    # Clean up resources if needed
+
+app = FastAPI(
+    title="LicitatieAI API",
+    description="API for generating public procurement documents",
+    lifespan=lifespan
+)
 
 class GenerateRequest(BaseModel):
     document_type: str  # e.g., "caiet_sarcini", "fisa_date"
     project_title: str
-    section: Optional[str] = None
+    section: Optional[str] = "General"
     context_data: Optional[dict] = Field(default_factory=dict)
 
 class GenerateResponse(BaseModel):
@@ -21,28 +41,26 @@ def health_check():
 @app.post("/generate", response_model=GenerateResponse)
 def generate_document_section(request: GenerateRequest):
     """
-    Mock endpoint to generate a document section.
-    In a real scenario, this would:
-    1. Retrieve context from Vector DB (RAG).
-    2. Call LLM with the prompt.
-    3. Return the generated text.
+    Generates a document section using RAG.
     """
+    topic = f"{request.section} - {request.project_title}"
 
-    # Mock Logic
-    if request.document_type == "caiet_sarcini" and "obiect" in (request.section or "").lower():
-        content = (
-            f"OBIECTUL ACHIZIȚIEI: {request.project_title}\n\n"
-            "Autoritatea contractantă dorește să achiziționeze servicii de înaltă calitate "
-            "în conformitate cu specificațiile tehnice anexate. "
-            "Prezentul Caiet de Sarcini face parte integrantă din documentația de atribuire..."
-        )
-        sources = ["Legea 98/2016 Art. 155"]
-    else:
-        content = (
-            f"Aceasta este o secțiune generată automat pentru {request.document_type} "
-            f"pentru proiectul '{request.project_title}'."
-        )
-        sources = ["General Template"]
+    # 1. Retrieve Context
+    print(f"Retrieving context for: {topic}")
+    context_docs = rag_engine.retrieve_context(topic)
+
+    # 2. Extract Sources for response
+    sources = [doc.metadata.get("source", "Unknown") for doc in context_docs]
+    # Deduplicate sources
+    sources = list(set(sources))
+
+    # 3. Generate Content
+    print("Generating content...")
+    content = rag_engine.generate_completion(
+        topic=topic,
+        context_docs=context_docs,
+        document_type=request.document_type
+    )
 
     return GenerateResponse(content=content, source_references=sources)
 
