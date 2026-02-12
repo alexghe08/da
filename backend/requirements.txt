@@ -7,3 +7,5 @@ pypdf
 openai
 python-dotenv
 langchain-openai
+python-docx
+docxtpl
